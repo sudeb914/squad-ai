@@ -97,6 +97,9 @@ class MainWindow(QWidget):
         self._staged: List[str] = []
         self._busy = False
         self._overlay: Optional[ScreenshotOverlay] = None
+        # Remember the last region the user selected so "Lock area" can lock it
+        # retroactively (select once → turn Lock on → reused next time).
+        self._last_region: Optional[Region] = None
         # Keep strong refs to running workers so Python doesn't GC a QRunnable
         # (or its signals object) mid-flight — that caused a segfault after OCR.
         self._live_workers: set = set()
@@ -700,6 +703,30 @@ class MainWindow(QWidget):
         bar = self.scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
 
+    # ---- animated "finding" (typing) indicator ----
+    def _start_typing(self, label: QLabel) -> None:
+        self._typing_label = label
+        self._typing_dots = 0
+        if not hasattr(self, "_typing_timer"):
+            self._typing_timer = QTimer(self)
+            self._typing_timer.timeout.connect(self._tick_typing)
+        self._typing_timer.start(320)
+        self._tick_typing()
+
+    def _tick_typing(self) -> None:
+        label = getattr(self, "_typing_label", None)
+        if label is None:
+            return
+        self._typing_dots = (self._typing_dots + 1) % 4
+        dots = "●" * (self._typing_dots or 1)
+        label.setText(f"<span style='color:{COLORS['accent']};letter-spacing:2px'>"
+                      f"{dots}</span>")
+
+    def _stop_typing(self) -> None:
+        if hasattr(self, "_typing_timer"):
+            self._typing_timer.stop()
+        self._typing_label = None
+
     def _restore_chat(self):
         msgs = self.svc.chat.messages(self.session_id)
         for m in msgs:
@@ -761,11 +788,10 @@ class MainWindow(QWidget):
         recent = self._recent_context()  # BEFORE adding the new turn
         self.svc.chat.add_message(self.session_id, "user", text)
         self._add("user", _html.escape(text))
-        pending = self._add("ai", "<i style='color:#9990c4'>…thinking</i>")
+        pending = self._add("ai", "")
+        self._start_typing(pending)
         self._set_busy(True)
         worker = AnswerWorker(self.svc.engine, text, recent_context=recent)
-        worker.signals.progress.connect(
-            lambda s: pending.setText(f"<i style='color:#9990c4'>{s}</i>"))
         worker.signals.finished.connect(
             lambda r: self._on_answer(r, pending, text))
         worker.signals.error.connect(lambda e: self._on_worker_error(e, pending))
@@ -773,6 +799,7 @@ class MainWindow(QWidget):
 
     def _on_answer(self, result: AnswerResult, pending: QLabel,
                    question_text: str = ""):
+        self._stop_typing()
         self._set_busy(False)
         if result.error and not result.answer:
             msg = ("Add your API key in ⚙ Settings to answer this one."
@@ -780,31 +807,15 @@ class MainWindow(QWidget):
                    else f"⚠️ {result.error}")
             pending.setText(_html.escape(msg))
             return
-        pending.setText(self._answer_body_html(question_text, result)
-                        + _source_meta(result.source))
+        pending.setText(self._answer_body_html(question_text, result))
         self.svc.chat.add_message(self.session_id, "assistant", result.answer,
                                   result.source.value)
         QTimer.singleShot(0, self._scroll_bottom)
 
     def _answer_body_html(self, question_text: str, result: AnswerResult) -> str:
-        """Render the answer. For option questions show ALL options as a tidy
-        checkbox list with the chosen one(s) ticked; otherwise plain text.
-        Each item is on its own line so answers never run together."""
-        options = self._options_for(question_text)
-        if not options:
-            return _answer_html(result.answer)
-
-        selected = self._selected_options(options, result)
-        rows = []
-        for opt in options:
-            on = opt in selected
-            box = "☑" if on else "☐"
-            color = COLORS["success"] if on else COLORS["muted"]
-            weight = "700" if on else "400"
-            rows.append(
-                f"<div style='margin:5px 0;color:{color};font-weight:{weight}'>"
-                f"{box}&nbsp;&nbsp;{_html.escape(opt)}</div>")
-        return "".join(rows)
+        """Show ONLY the final answer(s) — concise, no option list, no
+        explanation. Multi-select answers are shown one per line."""
+        return _answer_html(result.answer)
 
     @staticmethod
     def _options_for(question_text: str):
@@ -833,6 +844,7 @@ class MainWindow(QWidget):
         return selected
 
     def _on_worker_error(self, err: str, pending: QLabel):
+        self._stop_typing()
         self._set_busy(False)
         pending.setText(_html.escape(f"⚠️ {err}"))
 
@@ -935,6 +947,8 @@ class MainWindow(QWidget):
         self.raise_()
         if region is None or not path:       # cancelled
             return
+        # Remember it so Lock area can adopt this exact region afterwards.
+        self._last_region = region
         if self.chip_lock.isChecked():
             self.svc.capture.save_locked(region.x, region.y, region.w, region.h)
             self.chip_new.setVisible(True)
@@ -1072,9 +1086,11 @@ class MainWindow(QWidget):
         recent = self._recent_context()  # capture history BEFORE this turn
         for p in paths:
             self._add_image(p)
-        pending = self._add("ai", "<i style='color:#9990c4'>Reading…</i>")
+        pending = self._add("ai", "")
+        self._start_typing(pending)
         self._set_busy(True)
         if not self.ocr.any_engine_available():
+            self._stop_typing()
             self._set_busy(False)
             pending.setText("No OCR engine found. Install Tesseract "
                             "(brew install tesseract) or type the question.")
@@ -1100,6 +1116,7 @@ class MainWindow(QWidget):
 
     def _after_ocr(self, ocr_result, pending: QLabel, recent: str = ""):
         if not ocr_result.text.strip():
+            self._stop_typing()
             self._set_busy(False)
             pending.setText("OCR did not detect any text.")
             return
@@ -1112,9 +1129,6 @@ class MainWindow(QWidget):
         # answer each one separately so every question gets its own answer.
         blocks = split_questions(cleaned)
         if len(blocks) > 1:
-            pending.setText(
-                f"<i style='color:#9990c4'>Answering {len(blocks)} "
-                f"questions…</i>")
             worker = FnWorker(self._answer_blocks, blocks, recent)
             worker.signals.finished.connect(
                 lambda pairs: self._on_multi_answer(pairs, pending))
@@ -1123,10 +1137,7 @@ class MainWindow(QWidget):
             self._start(worker)
             return
 
-        pending.setText("<i style='color:#9990c4'>Searching locally…</i>")
         worker = AnswerWorker(self.svc.engine, cleaned, recent_context=recent)
-        worker.signals.progress.connect(
-            lambda s: pending.setText(f"<i style='color:#9990c4'>{s}</i>"))
         worker.signals.finished.connect(
             lambda r: self._on_answer(r, pending, cleaned))
         worker.signals.error.connect(lambda e: self._on_worker_error(e, pending))
@@ -1156,6 +1167,7 @@ class MainWindow(QWidget):
         return lines[0] if lines else ""
 
     def _on_multi_answer(self, pairs, pending: QLabel):
+        self._stop_typing()
         self._set_busy(False)
         pending.setText(f"<b>Answered {len(pairs)} questions:</b>")
         for block, result in pairs:
@@ -1166,8 +1178,7 @@ class MainWindow(QWidget):
                 body = (f"<span style='color:#fbbf24'>⚠️ "
                         f"{_html.escape(result.error)}</span>")
             else:
-                body = (self._answer_body_html(block, result)
-                        + _source_meta(result.source))
+                body = self._answer_body_html(block, result)
             self._add("ai", head + body)
             if result.answer:
                 self.svc.chat.add_message(
@@ -1187,7 +1198,14 @@ class MainWindow(QWidget):
         every F8/📸 reuses it. Off = clear the saved region, pick fresh each time.
         """
         if self.chip_lock.isChecked():
-            self.status_lbl.setText("Lock on: next capture sets the area.")
+            if self._last_region is not None:
+                # Lock the area the user just used, so the next 📸 reuses it.
+                r = self._last_region
+                self.svc.capture.save_locked(r.x, r.y, r.w, r.h)
+                self.chip_new.setVisible(True)
+                self.status_lbl.setText("Locked to your last area ✓")
+            else:
+                self.status_lbl.setText("Lock on: next capture sets the area.")
             QTimer.singleShot(2500, lambda: self.status_lbl.setText(""))
         else:
             self.svc.capture.clear_lock()

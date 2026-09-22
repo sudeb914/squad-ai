@@ -60,9 +60,9 @@ class AgentRouterConfig:
     base_url: str = "https://agentrouter.org/v1"
     temperature: float = 0.1
     max_output_tokens: int = 600
-    # A touch higher than DeepSeek's 120 so flash/reasoning models always have
-    # room to emit the final JSON (too small a cap can yield empty content).
-    max_output_tokens_simple: int = 512
+    # Enough room for the short JSON answer (avoids empty content) while keeping
+    # generation fast — we only want the final answer, no explanation.
+    max_output_tokens_simple: int = 256
     request_timeout_s: float = 30.0
     # AgentRouter only accepts requests from approved clients and rejects a
     # generic User-Agent with "unauthorized client detected" (before it even

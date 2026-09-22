@@ -32,20 +32,34 @@ class CredentialManager:
             log.warning("keyring unavailable; using restricted-perms file store")
 
     # -- public API -------------------------------------------------------
+    # Robustness: on some packaged Windows builds `keyring` imports fine but has
+    # no working backend, so set/get can fail or silently not persist. We now
+    # ALWAYS keep a 0600 file copy as the source of truth for reads, and treat
+    # keyring as best-effort. This guarantees keys survive save/restart.
     def set_key(self, provider: str, api_key: str) -> None:
+        # best-effort secure store
         if self._keyring is not None:
-            self._keyring.set_password(_SERVICE, provider, api_key)
-        else:
+            try:
+                self._keyring.set_password(_SERVICE, provider, api_key)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("keyring write failed, using file store: %s", exc)
+        # reliable fallback copy (0600) — the read path prefers this
+        try:
             self._file_set(provider, api_key)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("credential file write failed: %s", exc)
 
     def get_key(self, provider: str) -> Optional[str]:
+        # Prefer the file copy (always persists); fall back to keyring.
+        val = self._file_get(provider)
+        if val:
+            return val
         if self._keyring is not None:
             try:
                 return self._keyring.get_password(_SERVICE, provider)
             except Exception as exc:  # noqa: BLE001
                 log.warning("keyring read failed: %s", exc)
-                return None
-        return self._file_get(provider)
+        return None
 
     def delete_key(self, provider: str) -> None:
         if self._keyring is not None:
@@ -53,8 +67,10 @@ class CredentialManager:
                 self._keyring.delete_password(_SERVICE, provider)
             except Exception:  # noqa: BLE001
                 pass
-        else:
+        try:
             self._file_delete(provider)
+        except Exception:  # noqa: BLE001
+            pass
 
     def has_key(self, provider: str) -> bool:
         return bool(self.get_key(provider))
