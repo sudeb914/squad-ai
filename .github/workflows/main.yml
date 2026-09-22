@@ -1,0 +1,43 @@
+name: Build Squad AI (Windows + macOS)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, macos-latest ]
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-build.txt
+          pip install pyinstaller
+      - name: Run tests
+        run: python -m unittest discover -s tests
+      - name: Build the app
+        run: pyinstaller --noconfirm packaging/squad_ai.spec
+      - name: Upload Windows build
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SquadAI-Windows
+          path: dist/SquadAI
+      - name: Upload macOS build
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SquadAI-macOS
+          path: "dist/Squad AI.app"
