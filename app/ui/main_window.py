@@ -24,6 +24,7 @@ from ..capture.hotkey_manager import HotkeyManager
 from ..capture.region_selector import Region
 from ..capture.screenshot_manager import ScreenshotError, ScreenshotManager
 from ..core.models import AnswerResult, AnswerSource
+from ..core.question_splitter import split_questions
 from ..ocr.ocr_manager import OcrManager
 from ..services import Services
 from ..utils.config import CONFIG
@@ -31,6 +32,20 @@ from ..utils.paths import cache_dir
 from .screenshot_overlay import ScreenshotOverlay
 from .theme import COLORS, QSS
 from .workers import AnswerWorker, FnWorker
+
+
+def _to_float(text: str, default: float) -> float:
+    try:
+        return float(str(text).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_int(text: str, default: int) -> int:
+    try:
+        return int(float(str(text).strip()))
+    except (TypeError, ValueError):
+        return default
 
 
 def _answer_html(text: str) -> str:
@@ -57,7 +72,9 @@ def _source_meta(source: AnswerSource) -> str:
                     AnswerSource.SEMANTIC_MEMORY):
         t, c = "💾 Local memory · free (no AI)", COLORS["success"]
     elif source is AnswerSource.DEEPSEEK:
-        t, c = "🤖 DeepSeek AI (API call)", "#fbbf24"
+        label = "AgentRouter" if CONFIG.active_provider == "agentrouter" \
+            else "DeepSeek"
+        t, c = f"🤖 {label} AI (API call)", "#fbbf24"
     else:
         return ""
     return (f"<div style='margin-top:7px;border-top:1px dashed {COLORS['border']};"
@@ -113,6 +130,10 @@ class MainWindow(QWidget):
             from ..retrieval.embedding_manager import EmbeddingManager
             warm = FnWorker(lambda: EmbeddingManager.instance().available())
             self._start(warm)
+
+        # Warm the OCR engine in the BACKGROUND too, so the FIRST screenshot
+        # isn't slow while the model loads on demand.
+        self._start(FnWorker(self.ocr.any_engine_available))
 
     # ================= top bar =================
     def _build_topbar(self) -> QWidget:
@@ -289,6 +310,19 @@ class MainWindow(QWidget):
         v.setSpacing(8)
 
         v.addWidget(self._section("🔑 Connection"))
+        v.addWidget(self._label("AI Provider"))
+        self.f_provider = QComboBox()
+        self.f_provider.addItem("DeepSeek", "deepseek")
+        self.f_provider.addItem("AgentRouter", "agentrouter")
+        v.addWidget(self.f_provider)
+        prov_hint = QLabel("The selected provider handles the AI fallback. Each "
+                           "keeps its own key & settings — switching never wipes "
+                           "the other or any data.")
+        prov_hint.setObjectName("hint")
+        prov_hint.setWordWrap(True)
+        v.addWidget(prov_hint)
+
+        # --- DeepSeek ---
         v.addWidget(self._label("DeepSeek API Key"))
         self.f_key = QLineEdit()
         self.f_key.setEchoMode(QLineEdit.EchoMode.Password)
@@ -297,15 +331,50 @@ class MainWindow(QWidget):
         self.key_hint = QLabel()
         self.key_hint.setObjectName("hint")
         v.addWidget(self.key_hint)
-        v.addWidget(self._label("Model"))
+        v.addWidget(self._label("DeepSeek Model"))
         self.f_model = QComboBox()
         self.f_model.addItems(["deepseek-chat (fast, cheap)",
                                "deepseek-reasoner (smarter, pricier)"])
         v.addWidget(self.f_model)
-        test = QPushButton("Test connection 🔌")
+        test = QPushButton("Test DeepSeek 🔌")
         test.setObjectName("ghost")
         test.clicked.connect(self._test_connection)
         v.addWidget(test)
+
+        # --- AgentRouter ---
+        v.addWidget(self._divider())
+        v.addWidget(self._section("🛰️ AgentRouter (optional)"))
+        v.addWidget(self._label("AgentRouter API Key"))
+        self.f_ar_key = QLineEdit()
+        self.f_ar_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.f_ar_key.setPlaceholderText("Paste AgentRouter key")
+        v.addWidget(self.f_ar_key)
+        self.ar_key_hint = QLabel()
+        self.ar_key_hint.setObjectName("hint")
+        v.addWidget(self.ar_key_hint)
+        v.addWidget(self._label("Base URL"))
+        self.f_ar_base = QLineEdit()
+        v.addWidget(self.f_ar_base)
+        v.addWidget(self._label("Model"))
+        self.f_ar_model = QLineEdit()
+        self.f_ar_model.setPlaceholderText("deepseek-v4-flash")
+        v.addWidget(self.f_ar_model)
+        ar_row = QHBoxLayout()
+        tcol = QVBoxLayout()
+        tcol.addWidget(self._label("Temperature"))
+        self.f_ar_temp = QLineEdit()
+        tcol.addWidget(self.f_ar_temp)
+        mcol = QVBoxLayout()
+        mcol.addWidget(self._label("Max output tokens"))
+        self.f_ar_maxtok = QLineEdit()
+        mcol.addWidget(self.f_ar_maxtok)
+        ar_row.addLayout(tcol)
+        ar_row.addLayout(mcol)
+        v.addLayout(ar_row)
+        ar_test = QPushButton("Test AgentRouter 🔌")
+        ar_test.setObjectName("ghost")
+        ar_test.clicked.connect(self._test_agentrouter)
+        v.addWidget(ar_test)
 
         v.addWidget(self._divider())
         v.addWidget(self._section("⌨️ Screenshot hotkey"))
@@ -462,6 +531,20 @@ class MainWindow(QWidget):
         self.f_memory.setChecked(CONFIG.enable_memory)
         self.mem_count.setText(f"({self.svc.memory_repo.count()} saved)")
 
+        # provider selector + AgentRouter fields
+        pidx = self.f_provider.findData(CONFIG.active_provider)
+        self.f_provider.setCurrentIndex(pidx if pidx >= 0 else 0)
+        ar = CONFIG.agentrouter
+        ar_key = self.svc.credentials.get_key("agentrouter")
+        self.f_ar_key.setText("")
+        self.ar_key_hint.setText(
+            f"Saved: {self.svc.credentials.masked(ar_key)}" if ar_key
+            else "No AgentRouter key saved yet.")
+        self.f_ar_base.setText(ar.base_url)
+        self.f_ar_model.setText(ar.model)
+        self.f_ar_temp.setText(str(ar.temperature))
+        self.f_ar_maxtok.setText(str(ar.max_output_tokens))
+
     def _save_settings(self):
         key = self.f_key.text().strip()
         if key and not key.startswith("•"):
@@ -479,6 +562,10 @@ class MainWindow(QWidget):
         CONFIG.provider.model = model
         CONFIG.enable_memory = self.f_memory.isChecked()
         self.svc.settings.set("enable_memory", CONFIG.enable_memory)
+
+        # active provider + AgentRouter config
+        self._save_agentrouter_fields()
+
         hk = self.f_hotkey.text().strip() or "F8"
         if hk != CONFIG.capture.hotkey:
             CONFIG.capture.hotkey = hk
@@ -532,13 +619,52 @@ class MainWindow(QWidget):
         key = self.f_key.text().strip()
         if key and not key.startswith("•"):
             self.svc.credentials.set_key(CONFIG.provider.name, key)
-        provider = self.svc.build_provider()
+        provider = self.svc.build_named_provider("deepseek")
         if provider is None:
             QMessageBox.warning(self, "No key", "Add your DeepSeek key first.")
             return
         ok, msg = provider.test_connection()
         (QMessageBox.information if ok else QMessageBox.warning)(
-            self, "Connection", msg)
+            self, "✓ Connected" if ok else "Connection failed", msg)
+
+    def _save_agentrouter_fields(self) -> None:
+        """Persist the active-provider choice and AgentRouter config + key."""
+        prov = self.f_provider.currentData() or "deepseek"
+        CONFIG.active_provider = prov
+        self.svc.settings.set("active_provider", prov)
+
+        ar_key = self.f_ar_key.text().strip()
+        if ar_key and not ar_key.startswith("•"):
+            self.svc.credentials.set_key("agentrouter", ar_key)
+
+        ar = CONFIG.agentrouter
+        ar.base_url = self.f_ar_base.text().strip() or ar.base_url
+        ar.model = self.f_ar_model.text().strip() or ar.model
+        ar.temperature = _to_float(self.f_ar_temp.text(), ar.temperature)
+        ar.max_output_tokens = _to_int(self.f_ar_maxtok.text(),
+                                       ar.max_output_tokens)
+        s = self.svc.settings
+        s.set("agentrouter_base_url", ar.base_url)
+        s.set("agentrouter_model", ar.model)
+        s.set("agentrouter_temperature", ar.temperature)
+        s.set("agentrouter_max_tokens", ar.max_output_tokens)
+
+    def _test_agentrouter(self):
+        # apply the current fields first so the test reflects what's on screen
+        self._save_agentrouter_fields()
+        typed = self.f_ar_key.text().strip()
+        if typed and not typed.startswith("•"):
+            from ..providers.agentrouter_provider import AgentRouterProvider
+            provider = AgentRouterProvider(typed)
+        else:
+            provider = self.svc.build_named_provider("agentrouter")
+        if provider is None:
+            QMessageBox.warning(self, "No key",
+                                "Add your AgentRouter key first.")
+            return
+        ok, msg = provider.test_connection()
+        (QMessageBox.information if ok else QMessageBox.warning)(
+            self, "✓ Connected" if ok else "Connection failed", msg)
 
     def _export_mem(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -846,33 +972,100 @@ class MainWindow(QWidget):
             self._render_staged()
 
     def _render_staged(self):
-        while self.staged_layout.count():
-            item = self.staged_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self._clear_layout(self.staged_layout)
         if not self._staged:
             self.staged_row.hide()
             return
         self.staged_row.show()
-        lbl = QLabel(f"{len(self._staged)} staged · press Submit")
+
+        header = QHBoxLayout()
+        lbl = QLabel(f"{len(self._staged)} screenshot(s) ready · press Submit")
         lbl.setStyleSheet(f"color:{COLORS['accent']};font-size:11px;"
                           "font-weight:600;")
-        self.staged_layout.addWidget(lbl)
+        header.addWidget(lbl)
+        header.addStretch(1)
+        clear = QPushButton("Clear all")
+        clear.setObjectName("mini")
+        clear.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear.clicked.connect(self._clear_staged)
+        header.addWidget(clear)
+        self.staged_layout.addLayout(header)
+
+        # thumbnail strip with a ✕ remove button on each; click a thumb to preview
+        strip = QHBoxLayout()
+        strip.setSpacing(8)
         for i, path in enumerate(self._staged):
-            thumb = QLabel()
-            pix = QPixmap(path)
-            if not pix.isNull():
-                thumb.setPixmap(pix.scaledToHeight(
-                    34, Qt.TransformationMode.SmoothTransformation))
-            thumb.setToolTip("Click to remove")
-            thumb.mousePressEvent = lambda _e, idx=i: self._unstage(idx)
-            self.staged_layout.addWidget(thumb)
-        self.staged_layout.addStretch(1)
+            strip.addWidget(self._staged_thumb(i, path))
+        strip.addStretch(1)
+        self.staged_layout.addLayout(strip)
+
+    def _staged_thumb(self, idx: int, path: str) -> QWidget:
+        cell = QWidget()
+        cl = QVBoxLayout(cell)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(2)
+
+        thumb = QLabel()
+        pix = QPixmap(path)
+        if not pix.isNull():
+            thumb.setPixmap(pix.scaledToHeight(
+                60, Qt.TransformationMode.SmoothTransformation))
+        else:
+            thumb.setText("📸")
+        thumb.setCursor(Qt.CursorShape.PointingHandCursor)
+        thumb.setToolTip("Click to preview full size")
+        thumb.mousePressEvent = lambda _e, p=path: self._preview(p)
+        cl.addWidget(thumb, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        rm = QPushButton(f"✕ #{idx + 1}")
+        rm.setObjectName("mini")
+        rm.setCursor(Qt.CursorShape.PointingHandCursor)
+        rm.setToolTip("Remove this screenshot")
+        rm.clicked.connect(lambda _c=False, i=idx: self._unstage(i))
+        cl.addWidget(rm, 0, Qt.AlignmentFlag.AlignHCenter)
+        return cell
+
+    def _preview(self, path: str):
+        """Show the chosen screenshot full size in a dialog before sending."""
+        from PySide6.QtWidgets import QDialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Screenshot preview")
+        lay = QVBoxLayout(dlg)
+        lbl = QLabel()
+        pix = QPixmap(path)
+        if not pix.isNull():
+            screen = self.screen().availableGeometry() if self.screen() else None
+            max_w = min(900, screen.width() - 80) if screen else 900
+            max_h = min(700, screen.height() - 120) if screen else 700
+            lbl.setPixmap(pix.scaled(max_w, max_h,
+                          Qt.AspectRatioMode.KeepAspectRatio,
+                          Qt.TransformationMode.SmoothTransformation))
+        else:
+            lbl.setText("Could not load image.")
+        lay.addWidget(lbl)
+        close = QPushButton("Close")
+        close.clicked.connect(dlg.accept)
+        lay.addWidget(close)
+        dlg.exec()
 
     def _unstage(self, idx: int):
         if 0 <= idx < len(self._staged):
             self._staged.pop(idx)
             self._render_staged()
+
+    def _clear_staged(self):
+        self._staged = []
+        self._render_staged()
+
+    @staticmethod
+    def _clear_layout(layout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+            elif item.layout():
+                MainWindow._clear_layout(item.layout())
 
     def _answer_images(self, paths: List[str]):
         if self._busy or not paths:
@@ -915,6 +1108,22 @@ class MainWindow(QWidget):
         # Store the OCR'd text as the user turn so later questions about the same
         # page ("based on the above…") can use it as context.
         self.svc.chat.add_message(self.session_id, "user", cleaned)
+
+        # A single screenshot can hold SEVERAL questions. Split the page and
+        # answer each one separately so every question gets its own answer.
+        blocks = split_questions(cleaned)
+        if len(blocks) > 1:
+            pending.setText(
+                f"<i style='color:#9990c4'>Answering {len(blocks)} "
+                f"questions…</i>")
+            worker = FnWorker(self._answer_blocks, blocks, recent)
+            worker.signals.finished.connect(
+                lambda pairs: self._on_multi_answer(pairs, pending))
+            worker.signals.error.connect(
+                lambda e: self._on_worker_error(e, pending))
+            self._start(worker)
+            return
+
         pending.setText("<i style='color:#9990c4'>Searching locally…</i>")
         worker = AnswerWorker(self.svc.engine, cleaned, recent_context=recent)
         worker.signals.progress.connect(
@@ -922,6 +1131,49 @@ class MainWindow(QWidget):
         worker.signals.finished.connect(lambda r: self._on_answer(r, pending))
         worker.signals.error.connect(lambda e: self._on_worker_error(e, pending))
         self._start(worker)
+
+    def _answer_blocks(self, blocks: List[str], recent: str):
+        """Answer each question block (runs off the GUI thread). Each block is
+        one question → at most one API call, exactly like a single question."""
+        pairs = []
+        for b in blocks:
+            try:
+                r = self.svc.engine.answer(b, recent_context=recent)
+            except Exception as exc:  # noqa: BLE001
+                r = AnswerResult(answer="", source=AnswerSource.UNRESOLVED,
+                                 confidence=0.0, reasoning_code="ERROR",
+                                 error=str(exc))
+            pairs.append((b, r))
+        return pairs
+
+    @staticmethod
+    def _question_label(block: str) -> str:
+        """The question line (the one ending in '?', else the first line)."""
+        lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+        for ln in lines:
+            if ln.endswith("?"):
+                return ln
+        return lines[0] if lines else ""
+
+    def _on_multi_answer(self, pairs, pending: QLabel):
+        self._set_busy(False)
+        pending.setText(f"<b>Answered {len(pairs)} questions:</b>")
+        for block, result in pairs:
+            q = _html.escape(self._question_label(block))
+            head = (f"<div style='color:{COLORS['accent']};font-weight:700;"
+                    f"margin-bottom:3px'>Q: {q}</div>")
+            if result.error and not result.answer:
+                body = (f"<span style='color:#fbbf24'>⚠️ "
+                        f"{_html.escape(result.error)}</span>")
+            else:
+                body = _answer_html(result.answer) + _source_meta(result.source)
+            self._add("ai", head + body)
+            if result.answer:
+                self.svc.chat.add_message(
+                    self.session_id, "assistant",
+                    f"Q: {self._question_label(block)}\n{result.answer}",
+                    result.source.value)
+        QTimer.singleShot(0, self._scroll_bottom)
 
     # ---- chips ----
     def _toggle_auto(self):
