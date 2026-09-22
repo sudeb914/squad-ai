@@ -14,6 +14,9 @@ from pathlib import Path
 # must NOT move the database, so this value must never change once shipped.
 APP_ID = "com.squadai.desktop"
 APP_DISPLAY_NAME = "Squad AI"
+# Bump on each release so users can confirm they're running the latest build
+# (shown in Settings and the window title).
+APP_VERSION = "v9 · 2026-09-23"
 
 
 def _base_dir(kind: str) -> Path:

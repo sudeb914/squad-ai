@@ -30,7 +30,7 @@ from ..core.question_splitter import split_questions
 from ..ocr.ocr_manager import OcrManager
 from ..services import Services
 from ..utils.config import CONFIG
-from ..utils.paths import cache_dir
+from ..utils.paths import APP_VERSION, cache_dir
 from .screenshot_overlay import ScreenshotOverlay
 from .theme import COLORS, QSS
 from .workers import AnswerWorker, FnWorker
@@ -104,7 +104,7 @@ class MainWindow(QWidget):
         # (or its signals object) mid-flight — that caused a segfault after OCR.
         self._live_workers: set = set()
 
-        self.setWindowTitle("Squad AI")
+        self.setWindowTitle(f"Squad AI  ({APP_VERSION})")
         self.resize(430, 720)
         self.setStyleSheet(QSS)
         # Float above other apps (pinned) by default — the window stays visible
@@ -313,6 +313,10 @@ class MainWindow(QWidget):
         v = QVBoxLayout(inner)
         v.setContentsMargins(14, 14, 14, 14)
         v.setSpacing(8)
+
+        ver = QLabel(f"Build {APP_VERSION}")
+        ver.setObjectName("hint")
+        v.addWidget(ver)
 
         v.addWidget(self._section("🔑 Connection"))
         v.addWidget(self._label("AI Provider"))
