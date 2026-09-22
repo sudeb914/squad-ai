@@ -139,9 +139,17 @@ class Services:
 
         # --- AgentRouter config (all user-editable; never the API key here) ---
         ar = CONFIG.agentrouter
-        ar.base_url = self.settings.get("agentrouter_base_url", ar.base_url) \
+        saved_base = self.settings.get("agentrouter_base_url", ar.base_url) \
             or ar.base_url
+        # Migrate the earlier wrong 'co.' subdomain to the documented endpoint so
+        # existing installs start working without the user editing anything.
+        if "co.agentrouter.org" in saved_base:
+            saved_base = ar.base_url  # the corrected default
+            self.settings.set("agentrouter_base_url", saved_base)
+        ar.base_url = saved_base
         ar.model = self.settings.get("agentrouter_model", ar.model) or ar.model
+        ar.user_agent = self.settings.get(
+            "agentrouter_user_agent", ar.user_agent) or ar.user_agent
         ar.temperature = _as_float(
             self.settings.get("agentrouter_temperature"), ar.temperature)
         ar.max_output_tokens = _as_int(

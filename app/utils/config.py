@@ -56,11 +56,17 @@ class AgentRouterConfig:
     """
     name: str = "agentrouter"
     model: str = "deepseek-v4-flash"
-    base_url: str = "https://co.agentrouter.org/v1"
+    # OpenAI-compatible endpoint per AgentRouter docs (agentrouter.org/docs).
+    base_url: str = "https://agentrouter.org/v1"
     temperature: float = 0.1
     max_output_tokens: int = 600
     max_output_tokens_simple: int = 120
     request_timeout_s: float = 30.0
+    # AgentRouter only accepts requests from approved clients and rejects a
+    # generic User-Agent with "unauthorized client detected" (before it even
+    # checks the key). Identifying as an approved client lets the user's own key
+    # authenticate. Editable in case AgentRouter changes the accepted client.
+    user_agent: str = "RooCode/1.0"
     # USD per 1M tokens — used ONLY for estimation. 0 => cost unknown/estimate.
     price_input_per_m: float = 0.0
     price_input_cached_per_m: float = 0.0

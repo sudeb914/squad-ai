@@ -163,6 +163,12 @@ class OpenAICompatibleProvider(BaseAIProvider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        # Some routers (e.g. AgentRouter) gate access by client User-Agent and
+        # reject a generic one with "unauthorized client" before checking the
+        # key. Send the configured client id when the provider defines one.
+        ua = getattr(self.cfg, "user_agent", "")
+        if ua:
+            headers["User-Agent"] = ua
         timeout = self.cfg.request_timeout_s
         body = json.dumps(payload).encode("utf-8")
         try:
