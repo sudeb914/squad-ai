@@ -121,11 +121,19 @@ class ReferenceAnswerer:
                         best_s, best_p = s, p
                 return best_p, best_s, "semantic"
 
-        # fuzzy fallback (model not loaded yet)
+        # fuzzy fallback (semantic model not available). token_set_ratio scores
+        # ~1.0 when the query's words are a SUBSET of a longer reference question
+        # (e.g. "how are you" vs "how are you currently managing your diabetes"),
+        # which caused wrong matches. Penalise big length gaps so a short query
+        # can't hijack a long unrelated question — those go to the AI instead.
         best_p, best_s = None, 0.0
         for p in pairs:
-            s = max(F.ratio(q_norm, p.q_norm),
-                    F.token_set_ratio(q_norm, p.q_norm))
+            r = F.ratio(q_norm, p.q_norm)
+            ts = F.token_set_ratio(q_norm, p.q_norm)
+            la = q_norm and p.q_norm
+            len_ratio = (min(len(q_norm), len(p.q_norm))
+                         / max(1, max(len(q_norm), len(p.q_norm)))) if la else 0.0
+            s = max(r, ts * len_ratio)
             if s > best_s:
                 best_s, best_p = s, p
         return best_p, best_s, "fuzzy"
