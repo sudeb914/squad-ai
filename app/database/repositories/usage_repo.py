@@ -23,12 +23,17 @@ class UsageRepo:
         )
         return int(cur.lastrowid)
 
-    def summary(self, since_days: Optional[int] = None) -> dict:
-        where = ""
-        params: tuple = ()
+    def summary(self, since_days: Optional[int] = None,
+                provider: Optional[str] = None) -> dict:
+        clauses = []
+        params: list = []
         if since_days is not None:
-            where = "WHERE timestamp >= datetime('now', ?)"
-            params = (f"-{since_days} days",)
+            clauses.append("timestamp >= datetime('now', ?)")
+            params.append(f"-{since_days} days")
+        if provider is not None:
+            clauses.append("provider = ?")
+            params.append(provider)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         row = self.db.query_one(
             f"""SELECT COUNT(*) calls,
                    COALESCE(SUM(input_tokens),0)  input_tokens,
@@ -37,7 +42,7 @@ class UsageRepo:
                    COALESCE(SUM(estimated_cost_usd),0) cost,
                    COALESCE(SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),0) failures
                FROM api_usage {where}""",
-            params,
+            tuple(params),
         )
         return {
             "calls": row["calls"], "input_tokens": row["input_tokens"],
@@ -46,9 +51,17 @@ class UsageRepo:
             "cost": round(row["cost"], 6), "failures": row["failures"],
         }
 
-    def dashboard(self) -> dict:
+    def dashboard(self, provider: Optional[str] = None) -> dict:
+        """Today / 7-day / all-time totals, optionally scoped to one provider."""
         return {
-            "today": self.summary(since_days=1),
-            "last_7_days": self.summary(since_days=7),
-            "total": self.summary(since_days=None),
+            "today": self.summary(since_days=1, provider=provider),
+            "last_7_days": self.summary(since_days=7, provider=provider),
+            "total": self.summary(since_days=None, provider=provider),
         }
+
+    def providers(self) -> list:
+        """Distinct provider names that have recorded usage (most-used first)."""
+        rows = self.db.query(
+            "SELECT provider, COUNT(*) n FROM api_usage "
+            "GROUP BY provider ORDER BY n DESC")
+        return [r["provider"] for r in rows if r["provider"]]

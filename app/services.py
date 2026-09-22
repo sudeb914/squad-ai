@@ -20,6 +20,7 @@ from .database.repositories.settings_repo import SettingsRepo
 from .database.repositories.usage_repo import UsageRepo
 from .memory.answer_memory import AnswerMemory
 from .memory.import_export import MemoryPorter
+from .providers.agentrouter_provider import AgentRouterProvider
 from .providers.base_provider import BaseAIProvider
 from .providers.deepseek_provider import DeepSeekProvider
 from .retrieval.semantic_matcher import SemanticMatcher
@@ -28,6 +29,20 @@ from .utils.config import CONFIG
 from .utils.logging import get_logger, setup_logging
 
 log = get_logger("services")
+
+
+def _as_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class Services:
@@ -69,13 +84,29 @@ class Services:
 
     # -- provider ---------------------------------------------------------
     def build_provider(self) -> Optional[BaseAIProvider]:
+        """The provider for the CURRENTLY-SELECTED cloud AI (or None if its key
+        is missing). The answer engine calls this — switching ``active_provider``
+        is all it takes to change which cloud backend is used."""
+        return self.build_named_provider(CONFIG.active_provider)
+
+    def build_named_provider(self, name: str) -> Optional[BaseAIProvider]:
+        """Build a specific provider by name regardless of which is active.
+
+        Used by Settings' Test Connection so the user can test a provider before
+        making it active. Returns None when that provider has no stored key.
+        """
+        if name == "agentrouter":
+            key = self.credentials.get_key("agentrouter")
+            return AgentRouterProvider(key) if key else None
         key = self.credentials.get_key(CONFIG.provider.name)
-        if not key:
-            return None
-        return DeepSeekProvider(key)
+        return DeepSeekProvider(key) if key else None
 
     def has_api_key(self) -> bool:
-        return self.credentials.has_key(CONFIG.provider.name)
+        """Whether the ACTIVE provider has a key configured."""
+        name = CONFIG.active_provider
+        provider_key = "agentrouter" if name == "agentrouter" \
+            else CONFIG.provider.name
+        return self.credentials.has_key(provider_key)
 
     # -- settings ---------------------------------------------------------
     def _apply_persisted_settings(self) -> None:
@@ -100,6 +131,28 @@ class Services:
             model = CONFIG.provider.model  # default: deepseek-chat
             self.settings.set("model", model)
         CONFIG.provider.model = model
+
+        # --- active provider selector (deepseek | agentrouter) ---
+        active = self.settings.get("active_provider")
+        if active in ("deepseek", "agentrouter"):
+            CONFIG.active_provider = active
+
+        # --- AgentRouter config (all user-editable; never the API key here) ---
+        ar = CONFIG.agentrouter
+        ar.base_url = self.settings.get("agentrouter_base_url", ar.base_url) \
+            or ar.base_url
+        ar.model = self.settings.get("agentrouter_model", ar.model) or ar.model
+        ar.temperature = _as_float(
+            self.settings.get("agentrouter_temperature"), ar.temperature)
+        ar.max_output_tokens = _as_int(
+            self.settings.get("agentrouter_max_tokens"), ar.max_output_tokens)
+        ar.price_input_per_m = _as_float(
+            self.settings.get("agentrouter_price_input"), ar.price_input_per_m)
+        ar.price_input_cached_per_m = _as_float(
+            self.settings.get("agentrouter_price_cached"),
+            ar.price_input_cached_per_m)
+        ar.price_output_per_m = _as_float(
+            self.settings.get("agentrouter_price_output"), ar.price_output_per_m)
 
     def close(self) -> None:
         self.db.close()

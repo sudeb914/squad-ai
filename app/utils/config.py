@@ -45,6 +45,29 @@ class ProviderConfig:
 
 
 @dataclass
+class AgentRouterConfig:
+    """AgentRouter (OpenAI-compatible) provider config.
+
+    Kept separate from ``ProviderConfig`` so switching providers never disturbs
+    the DeepSeek settings. Base URL and model stay editable from Settings so a
+    future endpoint/model change needs no code edit. Pricing defaults to 0 —
+    AgentRouter may not return billing info, so any cost shown is an ESTIMATE
+    derived from these (user-configurable) values, never presented as actual.
+    """
+    name: str = "agentrouter"
+    model: str = "deepseek-v4-flash"
+    base_url: str = "https://co.agentrouter.org/v1"
+    temperature: float = 0.1
+    max_output_tokens: int = 600
+    max_output_tokens_simple: int = 120
+    request_timeout_s: float = 30.0
+    # USD per 1M tokens — used ONLY for estimation. 0 => cost unknown/estimate.
+    price_input_per_m: float = 0.0
+    price_input_cached_per_m: float = 0.0
+    price_output_per_m: float = 0.0
+
+
+@dataclass
 class RetrievalConfig:
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     reference_chunk_chars: int = 450
@@ -65,6 +88,11 @@ class CaptureConfig:
 class AppConfig:
     confidence: ConfidenceThresholds = field(default_factory=ConfidenceThresholds)
     provider: ProviderConfig = field(default_factory=ProviderConfig)
+    agentrouter: AgentRouterConfig = field(default_factory=AgentRouterConfig)
+    # Which cloud provider the AI-fallback uses: "deepseek" | "agentrouter".
+    # Each provider keeps its own key + config, so switching never wipes the
+    # other's settings or any local data.
+    active_provider: str = "deepseek"
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     log_level: str = "INFO"
@@ -77,6 +105,12 @@ class AppConfig:
     # Cache AI answers for free reuse. The user can turn this off (Settings) to
     # always get a fresh answer — sensible now that deepseek-flash is very cheap.
     enable_memory: bool = True
+
+    def active_provider_config(self):
+        """The config object for the currently-selected cloud provider."""
+        if self.active_provider == "agentrouter":
+            return self.agentrouter
+        return self.provider
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

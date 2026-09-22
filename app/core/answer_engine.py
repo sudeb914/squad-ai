@@ -228,7 +228,7 @@ class AnswerEngine:
             return AnswerResult(
                 answer="", source=AnswerSource.UNRESOLVED, confidence=0.0,
                 reasoning_code="API_KEY_MISSING", qtype=q.qtype,
-                error="DeepSeek API key is not configured.")
+                error="AI provider API key is not configured.")
         ctx = ContextBuilder(profile, self.semantic).build(q)
 
         # Send the user's FULL profile text (small, cheap) so DeepSeek can answer
@@ -251,13 +251,19 @@ class AnswerEngine:
                 error="I don't have that in your profile yet — add it in "
                       "⚙ Settings → Profile info.")
 
-        _emit(progress, "Asking DeepSeek...")
-        max_tokens = (CONFIG.provider.max_output_tokens_simple
+        _emit(progress, f"Asking AI ({provider.name})...")
+        # Output cap follows the ACTIVE provider so AgentRouter uses its own
+        # configured limits; for DeepSeek these equal the previous CONFIG values.
+        simple_cap = getattr(provider, "max_output_tokens_simple",
+                             CONFIG.provider.max_output_tokens_simple)
+        full_cap = getattr(provider, "max_output_tokens",
+                           CONFIG.provider.max_output_tokens)
+        max_tokens = (simple_cap
                       if q.qtype in (QuestionType.BOOLEAN, QuestionType.FACT,
                                      QuestionType.SINGLE_CHOICE,
                                      QuestionType.NUMERIC,
                                      QuestionType.NUMERIC_RANGE)
-                      else CONFIG.provider.max_output_tokens)
+                      else full_cap)
         # Send history ONLY when the question needs it (follow-up / refers to a
         # page shown earlier) — self-contained questions send none (cheaper).
         recent_to_send = (recent_context

@@ -27,6 +27,7 @@ from ..core.models import AnswerResult, AnswerSource
 from ..ocr.ocr_manager import OcrManager
 from ..services import Services
 from ..utils.config import CONFIG
+from ..utils.paths import cache_dir
 from .screenshot_overlay import ScreenshotOverlay
 from .theme import COLORS, QSS
 from .workers import AnswerWorker, FnWorker
