@@ -413,39 +413,6 @@ class MainWindow(QWidget):
         v.addWidget(self.f_ref)
 
         v.addWidget(self._divider())
-        v.addWidget(self._section("💾 Answer memory (your free dataset)"))
-        mem_hint = QLabel("Every answered question is saved and reused for FREE "
-                          "next time.")
-        mem_hint.setObjectName("hint")
-        mem_hint.setWordWrap(True)
-        v.addWidget(mem_hint)
-        self.f_memory = QCheckBox("Save answers to memory & reuse for free")
-        v.addWidget(self.f_memory)
-        mem_off_hint = QLabel("Turn off to always get a fresh AI answer (costs a "
-                              "little more, but deepseek-flash is very cheap).")
-        mem_off_hint.setObjectName("hint")
-        mem_off_hint.setWordWrap(True)
-        v.addWidget(mem_off_hint)
-        mem_row = QHBoxLayout()
-        exp = QPushButton("⬇️ Export")
-        exp.setObjectName("mini")
-        exp.clicked.connect(self._export_mem)
-        imp = QPushButton("⬆️ Import")
-        imp.setObjectName("mini")
-        imp.clicked.connect(self._import_mem)
-        clr = QPushButton("Clear")
-        clr.setObjectName("mini")
-        clr.clicked.connect(self._clear_mem)
-        self.mem_count = QLabel("")
-        self.mem_count.setObjectName("hint")
-        mem_row.addWidget(exp)
-        mem_row.addWidget(imp)
-        mem_row.addWidget(clr)
-        mem_row.addWidget(self.mem_count)
-        mem_row.addStretch(1)
-        v.addLayout(mem_row)
-
-        v.addWidget(self._divider())
         btn_row = QHBoxLayout()
         save = QPushButton("Save")
         save.setObjectName("primary")
@@ -538,8 +505,6 @@ class MainWindow(QWidget):
         self.f_ref.setPlainText(self.svc.settings.get("reference_text", "") or "")
         model = self.svc.settings.get("model", "deepseek-chat")
         self.f_model.setCurrentIndex(1 if model == "deepseek-reasoner" else 0)
-        self.f_memory.setChecked(CONFIG.enable_memory)
-        self.mem_count.setText(f"({self.svc.memory_repo.count()} saved)")
 
         # provider selector + AgentRouter fields
         pidx = self.f_provider.findData(CONFIG.active_provider)
@@ -570,8 +535,6 @@ class MainWindow(QWidget):
                  else "deepseek-chat")
         self.svc.settings.set("model", model)
         CONFIG.provider.model = model
-        CONFIG.enable_memory = self.f_memory.isChecked()
-        self.svc.settings.set("enable_memory", CONFIG.enable_memory)
 
         # active provider + AgentRouter config
         self._save_agentrouter_fields()
@@ -680,34 +643,6 @@ class MainWindow(QWidget):
         ok, msg = provider.test_connection()
         (QMessageBox.information if ok else QMessageBox.warning)(
             self, "✓ Connected" if ok else "Connection failed", msg)
-
-    def _export_mem(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export Q&A", "squad_ai_memory.json", "JSON (*.json)")
-        if path:
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(self.svc.porter.export_json())
-            QMessageBox.information(self, "Exported", f"Saved to {path}")
-
-    def _import_mem(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Import Q&A", "", "Data (*.json *.csv)")
-        if not path:
-            return
-        with open(path, "r", encoding="utf-8") as fh:
-            text = fh.read()
-        fmt = "csv" if path.lower().endswith(".csv") else "auto"
-        rep = self.svc.porter.import_text(text, fmt)
-        self.mem_count.setText(f"({self.svc.memory_repo.count()} saved)")
-        QMessageBox.information(self, "Import",
-                                f"Added {rep.added}, skipped {rep.skipped}.")
-
-    def _clear_mem(self):
-        if QMessageBox.question(self, "Clear memory",
-                                "Delete all saved Q&A?") == \
-                QMessageBox.StandardButton.Yes:
-            self.svc.memory_repo.clear()
-            self.mem_count.setText("(0 saved)")
 
     # ================= chat rendering =================
     def _row(self, bubble: QWidget, role: str) -> QWidget:

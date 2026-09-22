@@ -110,22 +110,16 @@ class AnswerEngine:
         q = question_parser.parse(text, explicit_options)
         profile = self._get_profile()
 
-        # A short follow-up in a live chat ("which one?", "which model?") depends
-        # on the conversation, so standalone memory would FALSE-match an
-        # unrelated stored answer. Skip fuzzy/semantic memory for those and let
-        # DeepSeek use the recent context instead.
+        # Answer-memory (auto-reuse of previously answered questions) has been
+        # removed by request: it occasionally returned a stale/wrong answer.
+        # We now resolve from deterministic rules and the user's own curated
+        # reference data only, then fall back to the AI. A short follow-up in a
+        # live chat still relies on recent context via the AI.
         followup = bool(recent_context) and _is_followup(q.normalized)
 
         result = self._try_rules(q, profile, progress)
-        if result is None and CONFIG.enable_memory:
-            result = self._try_exact_memory(q, progress)
         if result is None and not followup:
-            # Reference (the user's curated Q&A) is checked BEFORE the fuzzy
-            # memory cache, so trusted answers win over any stale cached ones.
             result = self._try_reference(q, progress)
-            if result is None and CONFIG.enable_memory:
-                result = (self._try_fuzzy_memory(q, progress)
-                          or self._try_semantic_memory(q, progress))
 
         if result and C.is_locally_resolved(result.confidence):
             return self._finish(q, result, start)
@@ -334,7 +328,7 @@ class AnswerEngine:
     def _finish(self, q: ParsedQuestion, result: AnswerResult,
                 start: float) -> AnswerResult:
         result.processing_time_ms = int((time.time() - start) * 1000)
-        self.answer_memory.maybe_store(q, result)
+        # Answer-memory storage removed by request — nothing is cached/reused.
         log.info("Q=%r -> %s (%s, conf=%.2f, api=%s, %dms)",
                  q.original[:60], result.answer[:40], result.source.value,
                  result.confidence, result.used_api, result.processing_time_ms)

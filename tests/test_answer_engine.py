@@ -107,39 +107,35 @@ class TestLocalDeterministic(unittest.TestCase):
 
 
 class TestMemory(unittest.TestCase):
+    """Answer-memory was removed by request. These guard that it never comes
+    back: an identical/similar question is answered fresh every time and is
+    never served from a cached memory source."""
+
     def setUp(self):
         self.svc, self.fake = make_services({"age": "39"})
 
-    def test_exact_memory_reuse(self):
-        # First: unknown subjective question -> API answers and is stored.
+    def test_identical_question_not_reused_from_memory(self):
         q = "What is your favorite color for a new car?"
         r1 = self.svc.engine.answer(q)
         self.assertEqual(r1.source, AnswerSource.DEEPSEEK)
         self.assertEqual(self.fake.calls, 1)
-        # Second identical question -> served from memory, no new API call.
+        # Asking again must call the AI again — nothing is cached/reused.
         r2 = self.svc.engine.answer(q)
-        self.assertEqual(r2.source, AnswerSource.EXACT_MEMORY)
-        self.assertEqual(self.fake.calls, 1)  # still 1
+        self.assertEqual(r2.source, AnswerSource.DEEPSEEK)
+        self.assertEqual(self.fake.calls, 2)
 
-    def test_similar_memory_reuse(self):
+    def test_no_memory_sources_ever_returned(self):
         self.svc.engine.answer("What is your favorite pizza topping?")
-        self.assertEqual(self.fake.calls, 1)
-        # Near-identical phrasing, same intent -> fuzzy memory, no new call.
         r = self.svc.engine.answer("what's your favorite pizza topping")
-        self.assertEqual(r.source, AnswerSource.FUZZY_MEMORY)
-        self.assertEqual(self.fake.calls, 1)
+        self.assertNotIn(r.source, (AnswerSource.EXACT_MEMORY,
+                                    AnswerSource.FUZZY_MEMORY,
+                                    AnswerSource.SEMANTIC_MEMORY))
+        self.assertEqual(self.fake.calls, 2)  # each answered fresh
 
-    def test_dangerous_false_match_not_reused(self):
-        # Store an answer about *owning* a car.
-        self.svc.engine.answer("Do you currently own a car?")
-        self.assertEqual(self.fake.calls, 1)
-        # A future-intent question is NOT the same -> must not reuse memory.
-        r = self.svc.engine.answer("Do you plan to buy a car next year?")
-        self.assertNotIn(r.source, (AnswerSource.FUZZY_MEMORY,
-                                    AnswerSource.SEMANTIC_MEMORY,
-                                    AnswerSource.EXACT_MEMORY))
-        self.assertEqual(r.source, AnswerSource.DEEPSEEK)
-        self.assertEqual(self.fake.calls, 2)  # a legitimate second call
+    def test_nothing_stored_to_memory_repo(self):
+        self.svc.engine.answer("Describe your ideal weekend.")
+        # No answer is ever written to the memory store.
+        self.assertEqual(self.svc.memory_repo.count(), 0)
 
 
 class TestApiDiscipline(unittest.TestCase):

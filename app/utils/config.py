@@ -110,9 +110,10 @@ class AppConfig:
     # the app falls back to fuzzy/API, then semantic activates automatically.
     enable_semantic: bool = True
     enable_reasoning_mode: bool = False  # expensive; off by default
-    # Cache AI answers for free reuse. The user can turn this off (Settings) to
-    # always get a fresh answer — sensible now that deepseek-flash is very cheap.
-    enable_memory: bool = True
+    # Answer-memory (auto-reuse of past answers) has been REMOVED by request —
+    # it sometimes returned stale/wrong answers. Kept as a constant False so any
+    # lingering references stay inert; the engine no longer reads or writes it.
+    enable_memory: bool = False
 
     def active_provider_config(self):
         """The config object for the currently-selected cloud provider."""

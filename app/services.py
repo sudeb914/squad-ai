@@ -123,9 +123,9 @@ class Services:
         es = self.settings.get("enable_semantic")
         if isinstance(es, bool):
             CONFIG.enable_semantic = es
-        em = self.settings.get("enable_memory")
-        if isinstance(em, bool):
-            CONFIG.enable_memory = em
+        # Answer-memory removed by request — always keep it off regardless of any
+        # previously stored preference.
+        CONFIG.enable_memory = False
         model = self.settings.get("model")
         # deepseek-flash/v4-pro are reasoning models that return empty content
         # under a small token budget — force the working deepseek-chat unless the
