@@ -40,7 +40,8 @@ class FakeProvider(BaseAIProvider):
 def make_services(profile: dict | None = None):
     """Fresh Services on a unique temp DB, with the AI provider faked."""
     db_path = tempfile.mktemp(prefix="squadai_", suffix=".sqlite3", dir=_TMP)
-    svc = Services(db_path=db_path)
+    # No default seeding in tests — keep the profile/reference deterministic.
+    svc = Services(db_path=db_path, seed_defaults=False)
     fake = FakeProvider()
     svc.engine.provider_factory = lambda: fake
     svc._fake = fake  # type: ignore[attr-defined]

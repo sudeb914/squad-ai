@@ -214,9 +214,18 @@ class OpenAICompatibleProvider(BaseAIProvider):
         cached = int(
             (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
             or usage.get("prompt_cache_hit_tokens", 0))
+        content = ""
         try:
-            content = data["choices"][0]["message"]["content"].strip()
-        except (KeyError, IndexError):
+            msg = data["choices"][0]["message"]
+            # Some models leave `content` empty and put the text in
+            # `reasoning_content`; some return content as a list of parts.
+            raw = msg.get("content") or msg.get("reasoning_content") or ""
+            if isinstance(raw, list):
+                raw = "".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in raw)
+            content = (raw or "").strip()
+        except (KeyError, IndexError, AttributeError, TypeError):
             content = ""
         answer, idx, conf = self._extract_answer(content)
         return ProviderResponse(

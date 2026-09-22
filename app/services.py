@@ -46,8 +46,10 @@ def _as_int(value, default: int) -> int:
 
 
 class Services:
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(self, db_path: Optional[Path] = None,
+                 seed_defaults: bool = True):
         setup_logging(CONFIG.log_level)
+        self._seed_enabled = seed_defaults
         self.db = Database(db_path)
 
         # repositories
@@ -68,6 +70,7 @@ class Services:
         self.porter = MemoryPorter(self.memory_repo)
 
         self._apply_persisted_settings()
+        self._seed_defaults()
 
         # the one and only answer engine
         self.engine = AnswerEngine(
@@ -161,6 +164,28 @@ class Services:
             ar.price_input_cached_per_m)
         ar.price_output_per_m = _as_float(
             self.settings.get("agentrouter_price_output"), ar.price_output_per_m)
+
+    def _seed_defaults(self) -> None:
+        """On first run, install the built-in instruction prompt + reference
+        corpus so the app works out of the box. Never overwrites the user's own
+        content: seeds each only when it is empty, and remembers it has run."""
+        if not getattr(self, "_seed_enabled", True):
+            return
+        if self.settings.get("defaults_seeded_v1"):
+            return
+        try:
+            from .core.default_data import (
+                DEFAULT_REFERENCE, DEFAULT_SYSTEM_PROMPT)
+            if not (self.settings.get("custom_prompt") or "").strip():
+                self.settings.set("custom_prompt", DEFAULT_SYSTEM_PROMPT)
+            if not self.reference.documents():
+                self.reference.add_document(
+                    DEFAULT_REFERENCE, title="Default reference")
+                self.settings.set("reference_text", DEFAULT_REFERENCE)
+            self.settings.set("defaults_seeded_v1", True)
+            log.info("Seeded default system prompt + reference data")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not seed defaults: %s", exc)
 
     def close(self) -> None:
         self.db.close()

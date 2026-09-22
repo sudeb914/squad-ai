@@ -316,6 +316,10 @@ class MainWindow(QWidget):
         self.f_provider = QComboBox()
         self.f_provider.addItem("DeepSeek", "deepseek")
         self.f_provider.addItem("AgentRouter", "agentrouter")
+        # Persist the choice IMMEDIATELY so it survives restart even without
+        # pressing Save (switching alone must never lose the other provider's
+        # saved key).
+        self.f_provider.currentIndexChanged.connect(self._on_provider_change)
         v.addWidget(self.f_provider)
         prov_hint = QLabel("The selected provider handles the AI fallback. Each "
                            "keeps its own key & settings — switching never wipes "
@@ -632,6 +636,11 @@ class MainWindow(QWidget):
         ok, msg = provider.test_connection()
         (QMessageBox.information if ok else QMessageBox.warning)(
             self, "✓ Connected" if ok else "Connection failed", msg)
+
+    def _on_provider_change(self) -> None:
+        prov = self.f_provider.currentData() or "deepseek"
+        CONFIG.active_provider = prov
+        self.svc.settings.set("active_provider", prov)
 
     def _save_agentrouter_fields(self) -> None:
         """Persist the active-provider choice and AgentRouter config + key."""
