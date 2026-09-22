@@ -12,4 +12,8 @@ keyring>=24.0         # secure API-key storage
 pynput>=1.7           # global hotkey
 mss>=9.0              # screenshot capture backend
 Pillow>=10.0          # image handling
-pytesseract>=0.3.10   # OCR (needs the Tesseract binary installed separately)
+pytesseract>=0.3.10   # OCR fallback (needs the Tesseract binary separately)
+
+# --- OCR (bundle-friendly primary; models ship in the wheel, no binary) ---
+# This is what makes screenshot OCR work in the standalone build out of the box.
+rapidocr-onnxruntime>=1.3.0

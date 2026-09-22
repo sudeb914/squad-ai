@@ -1,7 +1,8 @@
 """Coordinates OCR engines. Local-only; screenshots never leave the machine.
 
-Runs PaddleOCR first, estimates quality, and falls back to Tesseract if the
-Paddle result looks unusable. Combines multiple images (one logical question
+Tries engines in order of preference and falls back when a result looks
+unusable: PaddleOCR (if installed) → RapidOCR (bundle-friendly, the default in
+packaged builds) → Tesseract. Combines multiple images (one logical question
 spread across screenshots) in order. Independent of the UI.
 """
 from __future__ import annotations
@@ -11,6 +12,7 @@ from typing import List, Optional
 
 from . import preprocessing
 from .paddle_engine import OcrOutput, PaddleEngine
+from .rapidocr_engine import RapidOcrEngine
 from .tesseract_engine import TesseractEngine
 from ..utils.logging import get_logger
 
@@ -31,34 +33,34 @@ class OcrResult:
 class OcrManager:
     def __init__(self) -> None:
         self.paddle = PaddleEngine()
+        self.rapid = RapidOcrEngine()
         self.tesseract = TesseractEngine()
+        # Preference order; each is optional and skipped if unavailable.
+        self._engines = [self.paddle, self.rapid, self.tesseract]
 
     def any_engine_available(self) -> bool:
-        return self.paddle.available() or self.tesseract.available()
+        return any(e.available() for e in self._engines)
 
     def recognize_image(self, image_path: str,
                         preprocess: bool = True) -> OcrResult:
         path = preprocessing.preprocess(image_path) if preprocess else image_path
 
-        primary: Optional[OcrOutput] = None
-        if self.paddle.available():
-            primary = self.paddle.recognize(path)
+        best: Optional[OcrOutput] = None
+        for engine in self._engines:
+            if not engine.available():
+                continue
+            out = engine.recognize(path)
+            if self._usable(out):
+                if engine is not self._engines[0]:
+                    log.info("Used %s", out.engine)
+                return self._to_result(out)
+            # keep the first non-empty result as a last-resort fallback
+            if best is None and out and out.text.strip():
+                best = out
 
-        if self._usable(primary):
-            return self._to_result(primary)
-
-        # fallback
-        if self.tesseract.available():
-            fb = self.tesseract.recognize(path)
-            if self._usable(fb):
-                log.info("Used Tesseract fallback")
-                return self._to_result(fb)
-            primary = primary or fb
-
-        if primary is None:
-            return OcrResult(
-                "", 0.0, "none", usable=False)
-        return self._to_result(primary)
+        if best is None:
+            return OcrResult("", 0.0, "none", usable=False)
+        return self._to_result(best)
 
     def recognize_many(self, image_paths: List[str]) -> OcrResult:
         """OCR several images belonging to ONE question, combined in order."""

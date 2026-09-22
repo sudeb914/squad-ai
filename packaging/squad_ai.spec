@@ -21,8 +21,13 @@ block_cipher = None
 datas, binaries, hiddenimports = [], [], []
 
 # Bundle optional deps when present; skip silently when not installed.
+# rapidocr_onnxruntime + onnxruntime ship the OCR models/binaries that make
+# screenshot OCR work in the packaged app with no external install; cv2/shapely/
+# pyclipper are its runtime deps.
 for _pkg in ("paddleocr", "paddle", "sentence_transformers", "faiss",
-             "rapidfuzz", "keyring", "pynput", "mss"):
+             "rapidfuzz", "keyring", "pynput", "mss",
+             "rapidocr_onnxruntime", "onnxruntime", "cv2", "shapely",
+             "pyclipper"):
     try:
         d, b, h = collect_all(_pkg)
         datas += d
