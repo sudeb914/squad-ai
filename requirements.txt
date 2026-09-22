@@ -1,0 +1,33 @@
+# Squad AI dependencies.
+#
+# The deterministic core + tests run on the Python standard library ALONE.
+# Everything below is optional and lazily imported; each feature degrades
+# gracefully when its dependency is absent (see README "Optional features").
+
+# --- GUI (required to run the desktop app) ---
+PySide6>=6.6
+
+# --- Fuzzy matching (falls back to stdlib difflib if missing) ---
+rapidfuzz>=3.6
+
+# --- Local semantic search (falls back to exact/fuzzy only if missing) ---
+sentence-transformers>=2.6
+faiss-cpu>=1.8            # optional; pure-python cosine used if absent
+
+# --- OCR (falls back to typing/upload if missing) ---
+paddleocr>=2.7           # primary
+paddlepaddle>=2.6        # PaddleOCR backend
+pytesseract>=0.3.10      # fallback engine (needs the tesseract binary)
+Pillow>=10.0             # image preprocessing / ImageGrab
+
+# --- Screenshot capture (macOS uses built-in screencapture; these help elsewhere) ---
+mss>=9.0
+
+# --- Networking (falls back to stdlib urllib if missing) ---
+httpx>=0.27
+
+# --- Secure API-key storage (falls back to 0600 file if missing) ---
+keyring>=24.0
+
+# --- Global hotkey (falls back to on-screen button if missing) ---
+pynput>=1.7

@@ -1,0 +1,15 @@
+# Slim, reliably-installable runtime deps used for the packaged builds (CI).
+#
+# The heavy / fragile optional packages (paddleocr, paddlepaddle, faiss-cpu,
+# sentence-transformers) are intentionally left out so the cloud build always
+# succeeds and produces a launchable app. Those features degrade gracefully
+# when absent (see README). Add them back here later if you want them bundled.
+
+PySide6>=6.6          # GUI (required to launch the desktop app)
+rapidfuzz>=3.6        # fuzzy memory matching
+httpx>=0.27           # networking (DeepSeek); stdlib urllib is the fallback
+keyring>=24.0         # secure API-key storage
+pynput>=1.7           # global hotkey
+mss>=9.0              # screenshot capture backend
+Pillow>=10.0          # image handling
+pytesseract>=0.3.10   # OCR (needs the Tesseract binary installed separately)
