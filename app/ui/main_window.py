@@ -732,11 +732,21 @@ class MainWindow(QWidget):
 
     def _open_selection_overlay(self):
         try:
-            full = self.shots.capture_region(None)   # whole screen
+            self._open_selection_overlay_impl()
         except ScreenshotError as exc:
             self.show()
             QMessageBox.warning(self, "Capture failed", str(exc))
-            return
+        except Exception as exc:  # noqa: BLE001
+            # Never let a capture error tear the whole app down — show it and
+            # keep running so the user isn't dropped back to a reinstall.
+            self.show()
+            QMessageBox.warning(
+                self, "Capture failed",
+                f"Could not open the selection overlay.\n\n"
+                f"{type(exc).__name__}: {exc}")
+
+    def _open_selection_overlay_impl(self):
+        full = self.shots.capture_region(None)   # whole screen
         pix = QPixmap(full)
         if pix.isNull():
             self.show()
