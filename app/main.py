@@ -16,6 +16,33 @@ from .utils.paths import logs_dir
 log = get_logger("main")
 
 
+def _icon_file() -> str:
+    """Locate the bundled app icon (PNG) in both frozen and source runs."""
+    import os
+
+    candidates = []
+    base = getattr(sys, "_MEIPASS", None)          # PyInstaller bundle root
+    if base:
+        candidates.append(os.path.join(base, "AppIcon.png"))
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(os.path.join(here, "..", "packaging", "AppIcon.png"))
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return ""
+
+
+def _apply_app_icon(app) -> None:
+    path = _icon_file()
+    if not path:
+        return
+    try:
+        from PySide6.QtGui import QIcon
+        app.setWindowIcon(QIcon(path))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _install_crash_handler() -> None:
     """Log *and show* uncaught exceptions instead of silently aborting.
 
@@ -66,6 +93,7 @@ def run_gui() -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName("Squad AI")
+    _apply_app_icon(app)
     app.setStyleSheet(QSS)  # theme dialogs/message boxes too
     _install_crash_handler()
 

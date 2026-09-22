@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
 from ..capture.hotkey_manager import HotkeyManager
 from ..capture.region_selector import Region
 from ..capture.screenshot_manager import ScreenshotError, ScreenshotManager
+from ..core import normalization as _N
+from ..core import question_parser as _QP
 from ..core.models import AnswerResult, AnswerSource
 from ..core.question_splitter import split_questions
 from ..ocr.ocr_manager import OcrManager
@@ -58,10 +60,10 @@ def _answer_html(text: str) -> str:
         m = re.match(r"^(?:✅|✓|\d+[.)]|[-•])\s*(.*)$", line)
         if m:
             out.append(
-                f"<div style='margin:2px 0'><span style='color:{COLORS['success']};"
+                f"<div style='margin:5px 0'><span style='color:{COLORS['success']};"
                 f"font-weight:900'>✓</span>&nbsp;{_html.escape(m.group(1))}</div>")
         else:
-            out.append(f"<div style='margin:2px 0'>{_html.escape(line)}</div>")
+            out.append(f"<div style='margin:5px 0'>{_html.escape(line)}</div>")
     return "".join(out) or _html.escape(text)
 
 
@@ -506,6 +508,10 @@ class MainWindow(QWidget):
         self.stack.setCurrentIndex(0)
 
     def _show_settings(self):
+        # Toggle: if already on Settings, clicking ⚙ again returns to chat.
+        if self.stack.currentIndex() == 1:
+            self.stack.setCurrentIndex(0)
+            return
         self._load_settings_into_form()
         self.stack.setCurrentIndex(1)
 
@@ -816,22 +822,71 @@ class MainWindow(QWidget):
         worker = AnswerWorker(self.svc.engine, text, recent_context=recent)
         worker.signals.progress.connect(
             lambda s: pending.setText(f"<i style='color:#9990c4'>{s}</i>"))
-        worker.signals.finished.connect(lambda r: self._on_answer(r, pending))
+        worker.signals.finished.connect(
+            lambda r: self._on_answer(r, pending, text))
         worker.signals.error.connect(lambda e: self._on_worker_error(e, pending))
         self._start(worker)
 
-    def _on_answer(self, result: AnswerResult, pending: QLabel):
+    def _on_answer(self, result: AnswerResult, pending: QLabel,
+                   question_text: str = ""):
         self._set_busy(False)
         if result.error and not result.answer:
-            msg = ("Add your DeepSeek API key in ⚙ Settings to answer this one."
+            msg = ("Add your API key in ⚙ Settings to answer this one."
                    if result.reasoning_code == "API_KEY_MISSING"
                    else f"⚠️ {result.error}")
             pending.setText(_html.escape(msg))
             return
-        pending.setText(_answer_html(result.answer) + _source_meta(result.source))
+        pending.setText(self._answer_body_html(question_text, result)
+                        + _source_meta(result.source))
         self.svc.chat.add_message(self.session_id, "assistant", result.answer,
                                   result.source.value)
         QTimer.singleShot(0, self._scroll_bottom)
+
+    def _answer_body_html(self, question_text: str, result: AnswerResult) -> str:
+        """Render the answer. For option questions show ALL options as a tidy
+        checkbox list with the chosen one(s) ticked; otherwise plain text.
+        Each item is on its own line so answers never run together."""
+        options = self._options_for(question_text)
+        if not options:
+            return _answer_html(result.answer)
+
+        selected = self._selected_options(options, result)
+        rows = []
+        for opt in options:
+            on = opt in selected
+            box = "☑" if on else "☐"
+            color = COLORS["success"] if on else COLORS["muted"]
+            weight = "700" if on else "400"
+            rows.append(
+                f"<div style='margin:5px 0;color:{color};font-weight:{weight}'>"
+                f"{box}&nbsp;&nbsp;{_html.escape(opt)}</div>")
+        return "".join(rows)
+
+    @staticmethod
+    def _options_for(question_text: str):
+        if not question_text:
+            return []
+        try:
+            parsed = _QP.parse(question_text)
+            return [o.original for o in parsed.options]
+        except Exception:  # noqa: BLE001
+            return []
+
+    @staticmethod
+    def _selected_options(options, result: AnswerResult) -> set:
+        """Which options the AI/engine picked (supports multi-select)."""
+        selected = set()
+        idx = result.selected_option_index
+        if idx is not None and 0 <= idx < len(options):
+            selected.add(options[idx])
+        # also match by answer text so snapped/multi answers tick correctly
+        ans_norm = _N.normalize(result.answer or "")
+        if ans_norm:
+            for opt in options:
+                o_norm = _N.normalize(opt)
+                if o_norm and o_norm in ans_norm:
+                    selected.add(opt)
+        return selected
 
     def _on_worker_error(self, err: str, pending: QLabel):
         self._set_busy(False)
@@ -1128,7 +1183,8 @@ class MainWindow(QWidget):
         worker = AnswerWorker(self.svc.engine, cleaned, recent_context=recent)
         worker.signals.progress.connect(
             lambda s: pending.setText(f"<i style='color:#9990c4'>{s}</i>"))
-        worker.signals.finished.connect(lambda r: self._on_answer(r, pending))
+        worker.signals.finished.connect(
+            lambda r: self._on_answer(r, pending, cleaned))
         worker.signals.error.connect(lambda e: self._on_worker_error(e, pending))
         self._start(worker)
 
@@ -1161,12 +1217,13 @@ class MainWindow(QWidget):
         for block, result in pairs:
             q = _html.escape(self._question_label(block))
             head = (f"<div style='color:{COLORS['accent']};font-weight:700;"
-                    f"margin-bottom:3px'>Q: {q}</div>")
+                    f"margin-bottom:6px'>Q: {q}</div>")
             if result.error and not result.answer:
                 body = (f"<span style='color:#fbbf24'>⚠️ "
                         f"{_html.escape(result.error)}</span>")
             else:
-                body = _answer_html(result.answer) + _source_meta(result.source)
+                body = (self._answer_body_html(block, result)
+                        + _source_meta(result.source))
             self._add("ai", head + body)
             if result.answer:
                 self.svc.chat.add_message(
